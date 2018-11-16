@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+from os.path import lexists
+from datetime import datetime
+import io
+import json
+import re
+
+from atomicwrites import atomic_write # type: ignore
+from getch import getch # type: ignore
+
+from kython.org import date2org, datetime2org
+
+from config import BOOKS, STATE_PATH, ORG_PATH
+
+from my.books.kobo import get_datas, Item # type: ignore
+
+
+def get_logger():
+    return logging.getLogger('krill')
+
+from my.books.kobo import get_datas
+
+NOW = datetime.now() # TODO tz??
+
+# TODO reuse in telegram2org?..
+# TODO maybe move to kython?...
+def append_org_entry(fname: str, heading: str, tag: str=None, body=''):
+    heading = re.sub(r'\s', ' ', heading)
+    tag = '' if tag is None else f':{tag}:'
+    res = f"""* TODO {heading} {tag}
+  SCHEDULED: <{date2org(NOW)}>
+:PROPERTIES:
+:CREATED:  [{datetime2org(NOW)}]
+:END:
+{body}
+
+"""
+    # https://stackoverflow.com/a/13232181
+    if len(res.encode('utf8')) > 4096:
+        print(f"WARNING: writing out {res} might be non-atomic")
+    with io.open(fname, 'a') as fo:
+        fo.write(res)
+
+
+class Krill:
+    def __init__(self):
+        # TODO maybe store all states somewhere and git commit them occasionally?..
+        self.state_path = STATE_PATH
+        self.org_incoming_path = ORG_PATH
+        self.logger = get_logger()
+
+    def _load(self):
+        if not lexists(self.state_path):
+            return {}
+        else:
+            with open(self.state_path, 'r') as fo:
+                return json.load(fo)
+
+    def add(self, item: Item):
+        state = self._load()
+        id_ = item.datecreated
+        if id_ in state:
+            print(f"skipping {item}, as it's already been added to drill")
+            return
+
+        print("adding " + str(item))
+        append_org_entry(
+            fname=self.org_incoming_path,
+            heading=item.text,
+            body='from ' + item.title,
+            tag='drill',
+        )
+
+        state[id_] = str(item)
+        with atomic_write(self.state_path, overwrite=True) as fo:
+            json.dump(state, fo, ensure_ascii=False, indent=1, sort_keys=True)
+
+def main():
+    datas = get_datas()
+    drilly = [d for d in datas if d.title in drill_from]
+    filtered = []
+    for d in drilly:
+        words = d.text.strip().split()
+        if len(words) > 1 and d.annotation.strip() != 'drill':
+            print(f"skipping {d}, it doesn't look like a good drill candidate")
+        else:
+            filtered.append(d)
+    drilly = filtered
+    drilly = list(sorted(drilly, key=lambda d: d.dt_created))
+
+    krill = Krill()
+
+    # TODO filter more...
+
+    for d in drilly:
+        krill.add(d)
+
+main()

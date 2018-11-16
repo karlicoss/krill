@@ -1,0 +1,6 @@
+BOOKS = [
+    'some Kobo book titel',
+]
+
+STATE_PATH = '/path/to/program/state.json'
+ORG_PATH = '/path/to/file/with/drill/items.org'
