@@ -3,12 +3,15 @@ from os.path import lexists
 from datetime import datetime
 import io
 import json
+import logging
 import re
+import sys
 
 from atomicwrites import atomic_write # type: ignore
 from getch import getch # type: ignore
 
 from kython.org import date2org, datetime2org
+from kython.logging import setup_logzero
 
 from config import BOOKS, STATE_PATH, ORG_PATH
 
@@ -18,7 +21,6 @@ from my.books.kobo import get_datas, Item # type: ignore
 def get_logger():
     return logging.getLogger('krill')
 
-from my.books.kobo import get_datas
 
 NOW = datetime.now() # TODO tz??
 
@@ -37,7 +39,8 @@ def append_org_entry(fname: str, heading: str, tag: str=None, body=''):
 """
     # https://stackoverflow.com/a/13232181
     if len(res.encode('utf8')) > 4096:
-        print(f"WARNING: writing out {res} might be non-atomic")
+        logger = get_logger()
+        logger.warning("writing out %s might be non-atomic", res)
     with io.open(fname, 'a') as fo:
         fo.write(res)
 
@@ -60,10 +63,10 @@ class Krill:
         state = self._load()
         id_ = item.datecreated
         if id_ in state:
-            print(f"skipping {item}, as it's already been added to drill")
+            self.logger.info(f"skipping {item}, as it's already been added to drill")
             return
 
-        print("adding " + str(item))
+        self.logger.info("adding " + str(item))
         append_org_entry(
             fname=self.org_incoming_path,
             heading=item.text,
@@ -75,24 +78,70 @@ class Krill:
         with atomic_write(self.state_path, overwrite=True) as fo:
             json.dump(state, fo, ensure_ascii=False, indent=1, sort_keys=True)
 
+        print(f"added {item} to drill")
+
 def main():
+    logger = get_logger()
+    setup_logzero(logger, level=logging.DEBUG)
+
     datas = get_datas()
-    drilly = [d for d in datas if d.title in drill_from]
+
+    by_title = {}
+    for d in datas:
+        ll = by_title.get(d.title, [])
+        ll.append(d)
+        by_title[d.title] = ll
+
+    # TODO go through all??
+
+    errors = False
+
+    drilly = []
+    for b in BOOKS:
+        if b not in by_title:
+            # TODO how to exclude books from drill?
+            logger.warning(f"Book {b} is tracked in drill, but not known to Kobo")
+            errors = True
+        else:
+            drilly.extend(by_title[b])
+
+    def is_candidate(i: Item):
+        if i.kind == 'bookmark':
+            return
+        words = i.text.strip().split()
+        ann = i.annotation
+        if ann is None:
+            ann = ''
+        if len(words) > 1 and ann.strip() != 'drill':
+            return False
+        else: # I mean, what else could it be??
+            return True
+
+    extra = []
+    for b, lst in by_title.items():
+        if b not in BOOKS:
+            extra.extend([d for d in lst if is_candidate(d)])
+
     filtered = []
     for d in drilly:
-        words = d.text.strip().split()
-        if len(words) > 1 and d.annotation.strip() != 'drill':
-            print(f"skipping {d}, it doesn't look like a good drill candidate")
-        else:
+        if is_candidate(d):
             filtered.append(d)
+        else:
+            logger.info(f"skipping {d}, it doesn't look like a good drill candidate")
     drilly = filtered
     drilly = list(sorted(drilly, key=lambda d: d.dt_created))
 
     krill = Krill()
 
-    # TODO filter more...
-
     for d in drilly:
         krill.add(d)
+
+    if len(extra) > 0:
+        logger.info("extra candidates for drill:")
+        for e in extra:
+            logger.info(e)
+
+    if errors:
+        sys.exit(1)
 
 main()
