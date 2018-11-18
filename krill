@@ -112,7 +112,7 @@ def main():
         ann = i.annotation
         if ann is None:
             ann = ''
-        if len(words) > 1 and ann.strip() != 'drill':
+        if len(words) > 1 and ann.strip().lower() != 'drill':
             return False
         else: # I mean, what else could it be??
             return True
