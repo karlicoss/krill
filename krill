@@ -1,90 +1,58 @@
 #!/usr/bin/env python3
 from os.path import lexists
 from datetime import datetime
-import io
-import json
+from pathlib import Path
 import logging
 import re
 import sys
 
-from atomicwrites import atomic_write # type: ignore
-from getch import getch # type: ignore
-
-from kython.org import date2org, datetime2org
+from kython.org import date2org, datetime2org, append_org_entry
+from kython.state import JsonState
 from kython.logging import setup_logzero
 
 from config import BOOKS, STATE_PATH, ORG_PATH
 
-from my.books.kobo import get_datas, Item # type: ignore
+from my.books.kobo import Highlight, by_annotation # type: ignore
 
 
 def get_logger():
     return logging.getLogger('krill')
 
-
-NOW = datetime.now() # TODO tz??
-
-# TODO reuse in telegram2org?..
-# TODO maybe move to kython?...
-def append_org_entry(fname: str, heading: str, tag: str=None, body=''):
-    heading = re.sub(r'\s', ' ', heading)
-    tag = '' if tag is None else f':{tag}:'
-    res = f"""* TODO {heading} {tag}
-  SCHEDULED: <{date2org(NOW)}>
-:PROPERTIES:
-:CREATED:  [{datetime2org(NOW)}]
-:END:
-{body}
-
-"""
-    # https://stackoverflow.com/a/13232181
-    if len(res.encode('utf8')) > 4096:
-        logger = get_logger()
-        logger.warning("writing out %s might be non-atomic", res)
-    with io.open(fname, 'a') as fo:
-        fo.write(res)
-
-
 class Krill:
     def __init__(self):
-        # TODO maybe store all states somewhere and git commit them occasionally?..
-        self.state_path = STATE_PATH
-        self.org_incoming_path = ORG_PATH
+        self.state = JsonState(STATE_PATH)
+        self.org_incoming_path = Path(ORG_PATH)
         self.logger = get_logger()
 
-    def _load(self):
-        if not lexists(self.state_path):
-            return {}
-        else:
-            with open(self.state_path, 'r') as fo:
-                return json.load(fo)
+    def handled(self, item: Highlight):
+        return item.eid in self.state.get()
 
-    def add(self, item: Item):
-        state = self._load()
-        id_ = item.datecreated
-        if id_ in state:
+    def mark_done(self, item: Highlight):
+        st = self.state.get()
+        st[item.eid] = str(item)
+        self.state.update(st)
+
+    def add(self, item: Highlight):
+        if self.handled(item):
             self.logger.info(f"skipping {item}, as it's already been added to drill")
             return
 
-        self.logger.info("adding " + str(item))
+        self.logger.info("adding %s", item)
         append_org_entry(
-            fname=self.org_incoming_path,
+            self.org_incoming_path,
             heading=item.text,
             body='from ' + item.title,
-            tag='drill',
+            created=item.dt,
+            tags=['drill'],
         )
-
-        state[id_] = str(item)
-        with atomic_write(self.state_path, overwrite=True) as fo:
-            json.dump(state, fo, ensure_ascii=False, indent=1, sort_keys=True)
-
+        self.mark_done(item)
         print(f"added {item} to drill")
 
 def main():
     logger = get_logger()
     setup_logzero(logger, level=logging.DEBUG)
 
-    datas = get_datas()
+    datas = by_annotation(lambda _: True)
 
     by_title = {}
     for d in datas:
@@ -105,7 +73,7 @@ def main():
         else:
             drilly.extend(by_title[b])
 
-    def is_candidate(i: Item):
+    def is_candidate(i: Highlight):
         if i.kind == 'bookmark':
             return
         words = i.text.strip().split()
@@ -129,7 +97,7 @@ def main():
         else:
             logger.info(f"skipping {d}, it doesn't look like a good drill candidate")
     drilly = filtered
-    drilly = list(sorted(drilly, key=lambda d: d.dt_created))
+    drilly = list(sorted(drilly, key=lambda d: d.dt))
 
     krill = Krill()
 
