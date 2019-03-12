@@ -8,7 +8,7 @@ import sys
 
 from kython.org import date2org, datetime2org, append_org_entry
 from kython.state import JsonState
-from kython.logging import setup_logzero
+from kython.klogging import setup_logzero
 
 from config import BOOKS, STATE_PATH, ORG_PATH
 
